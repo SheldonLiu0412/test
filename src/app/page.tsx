@@ -3,14 +3,15 @@
 import { useState, FormEvent } from 'react';
 
 export default function Home() {
-  const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
+  const [messages, setMessages] = useState<{ role: string; content: string; id: string }[]>([]);
   const [input, setInput] = useState('');
 
-  const handleSubmit = async (e: FormEvent) => {
+    const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!input) return;
 
-    const newMessages = [...messages, { role: 'user', content: input }];
+    const userMessage = { role: 'user', content: input, id: Date.now().toString() };
+    const newMessages = [...messages, userMessage, { role: 'assistant', content: '', id: (Date.now() + 1).toString() }];
     setMessages(newMessages);
     setInput('');
 
@@ -19,11 +20,75 @@ export default function Home() {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ messages: newMessages }),
+      body: JSON.stringify({ messages: [userMessage] }), // Only send the user message
     });
 
-    const data = await response.json();
-    setMessages([...newMessages, { role: 'assistant', content: data.message }]);
+    if (!response.body) {
+      console.error('Response body is null');
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    const processStream = async () => {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+
+        const parts = buffer.split('\n');
+
+        // The last part might be incomplete, so we keep it in the buffer
+        buffer = parts.pop() || '';
+
+        for (const part of parts) {
+          if (part.trim() === '') continue;
+          try {
+            const obj = JSON.parse(part);
+            if (obj.type === 'token') {
+              setMessages(prev => prev.map((msg, index) => 
+                index === prev.length - 1 
+                  ? { ...msg, content: msg.content + obj.value } 
+                  : msg
+              ));
+            } else if (obj.type === 'tool-start') {
+              setMessages(prev => prev.map((msg, index) =>
+                index === prev.length - 1
+                  ? { ...msg, content: msg.content + `\n> Calling tool: **${obj.tool}** with input: \`\`\`${JSON.stringify(obj.input)}\`\`\`` }
+                  : msg
+              ));
+            } else if (obj.type === 'tool-end') {
+              setMessages(prev => prev.map((msg, index) =>
+                index === prev.length - 1
+                  ? { ...msg, content: msg.content + `\n> Tool returned: \`\`\`${obj.output}\`\`\`\n` }
+                  : msg
+              ));
+            } else if (obj.type === 'final') {
+              setMessages(prev => prev.map((msg, index) =>
+                index === prev.length - 1
+                  ? { ...msg, content: obj.result }
+                  : msg
+              ));
+            } else if (obj.type === 'error') {
+              setMessages(prev => prev.map((msg, index) =>
+                index === prev.length - 1
+                  ? { ...msg, content: msg.content + `\n> Error: ${obj.error}` }
+                  : msg
+              ));
+            }
+          } catch (e) {
+            console.error('Failed to parse JSON chunk', part, e);
+          }
+        }
+      }
+    };
+
+    processStream();
   };
 
   return (

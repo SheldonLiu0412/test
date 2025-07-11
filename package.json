@@ -12,6 +12,7 @@
     "@langchain/community": "^0.3.48",
     "@langchain/langgraph": "^0.3.7",
     "@langchain/openai": "^0.5.18",
+    "ai": "^4.3.17",
     "next": "15.3.5",
     "playwright": "^1.54.1",
     "react": "^19.0.0",
